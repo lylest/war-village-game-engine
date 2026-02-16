@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/wv-core", "crates/wv-cli"]
+resolver = "2"
