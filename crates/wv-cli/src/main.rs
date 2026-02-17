@@ -6,7 +6,7 @@ use crossterm::{
 };
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
-use wv_core::fighter::{FighterId, FighterData};
+use wv_core::fighter::{FighterData, FighterId};
 use wv_core::game::{GamePhase, GameState};
 use wv_core::input::InputState;
 use wv_core::physics::{ARENA_MIN_X, ARENA_MAX_X};

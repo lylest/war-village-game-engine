@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>War Village</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; color: #eee; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+  canvas { display: block; }
+
+  #hud {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: 12px 24px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    pointer-events: none;
+  }
+
+  .health-bar-container {
+    width: 300px;
+  }
+  .player-name {
+    font-size: 14px; font-weight: bold; margin-bottom: 4px;
+    text-shadow: 0 0 4px #000;
+  }
+  .bar-outer {
+    height: 18px; background: #333; border: 1px solid #555; border-radius: 3px;
+    overflow: hidden; margin-bottom: 4px;
+  }
+  .bar-inner {
+    height: 100%; transition: width 0.05s linear;
+  }
+  .health-fill { background: linear-gradient(180deg, #4f4, #282); }
+  .stamina-fill { background: linear-gradient(180deg, #48f, #228); }
+  .bar-outer.stamina { height: 10px; }
+  .wins { font-size: 12px; color: #fc0; }
+
+  #center-info {
+    text-align: center; min-width: 160px;
+  }
+  #round-display { font-size: 14px; color: #aaa; }
+  #timer-display { font-size: 28px; font-weight: bold; }
+  #phase-display {
+    font-size: 48px; font-weight: bold;
+    color: #fc0; text-shadow: 0 0 12px #f80;
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  #hit-info {
+    position: absolute; bottom: 40px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 16px; color: #f88; text-shadow: 0 0 6px #f00;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  #controls-help {
+    position: absolute; bottom: 8px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px; color: #666;
+    pointer-events: none;
+  }
+
+  .p2-side { text-align: right; }
+  .p2-side .bar-inner { float: right; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="health-bar-container" id="p1-hud">
+    <div class="player-name" id="p1-name">P1</div>
+    <div class="bar-outer"><div class="bar-inner health-fill" id="p1-health"></div></div>
+    <div class="bar-outer stamina"><div class="bar-inner stamina-fill" id="p1-stamina"></div></div>
+    <div class="wins" id="p1-wins"></div>
+  </div>
+  <div id="center-info">
+    <div id="round-display"></div>
+    <div id="timer-display"></div>
+  </div>
+  <div class="health-bar-container p2-side" id="p2-hud">
+    <div class="player-name" id="p2-name">P2</div>
+    <div class="bar-outer"><div class="bar-inner health-fill" id="p2-health"></div></div>
+    <div class="bar-outer stamina"><div class="bar-inner stamina-fill" id="p2-stamina"></div></div>
+    <div class="wins" id="p2-wins"></div>
+  </div>
+</div>
+
+<div id="phase-display"></div>
+<div id="hit-info"></div>
+<div id="controls-help">
+  P1: WASD move | J light | K heavy | L special | Shift block | Space dash
+  &nbsp;&nbsp;|&nbsp;&nbsp;
+  P2: Arrows move | Num1 light | Num2 heavy | Num3 special | Num0 block | NumEnter dash
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

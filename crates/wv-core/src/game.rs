@@ -13,6 +13,9 @@ const ROUNDS_TO_WIN: u32 = 2;
 const STAMINA_REGEN_RATE: f32 = 0.3; // per frame
 const DASH_STAMINA_COST: f32 = 20.0;
 const SPECIAL_STAMINA_COST: f32 = 30.0;
+const AERIAL_STAMINA_COST: f32 = 15.0;
+const SUPER_STAMINA_COST: f32 = 50.0;
+const ATTACK_LUNGE: f32 = 3.5; // forward impulse when starting any attack
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GamePhase {
@@ -70,7 +73,55 @@ impl Fighter {
             ActiveAttack::Light => &self.data.moveset.light_attack,
             ActiveAttack::Heavy => &self.data.moveset.heavy_attack,
             ActiveAttack::Special => &self.data.moveset.special_attack,
+            ActiveAttack::MidKick => &self.data.moveset.mid_kick,
+            ActiveAttack::LowKick => &self.data.moveset.low_kick,
+            ActiveAttack::Aerial => &self.data.moveset.aerial,
             ActiveAttack::ComboFinisher => &self.data.moveset.combo_finisher,
+            ActiveAttack::Super => &self.data.moveset.super_attack,
+        }
+    }
+
+    /// Returns the animation name the frontend should play for the current state.
+    pub fn current_animation(&self) -> &str {
+        // KO: always show death animation
+        if self.health <= 0.0 {
+            return self.data.animations.death;
+        }
+
+        match self.state_machine.state {
+            FighterState::Idle => self.data.animations.idle,
+            FighterState::Moving => {
+                let fs = self.facing.sign();
+                let fv = self.physics.velocity.x * fs; // positive = forward
+                let lv = self.physics.velocity.z;
+                if fv < -0.1 {
+                    // Moving backward
+                    self.data.animations.run_backward
+                } else if lv.abs() > 0.1 && fv < 0.5 {
+                    // Strafing — flip based on facing so model anim matches screen direction
+                    let model_left = (lv < 0.0) == (self.facing == Facing::Right);
+                    if model_left {
+                        self.data.animations.strafe_left
+                    } else {
+                        self.data.animations.strafe_right
+                    }
+                } else {
+                    self.data.animations.run
+                }
+            }
+            FighterState::Attacking => {
+                if let Some(attack) = self.state_machine.attack {
+                    self.get_attack_data(attack).anim
+                } else {
+                    self.data.animations.idle
+                }
+            }
+            FighterState::Blocking => self.data.animations.block,
+            FighterState::Dashing => self.data.animations.run,
+            FighterState::HitStun => self.data.animations.hit_reaction,
+            FighterState::Airborne => self.data.animations.hit_reaction,
+            FighterState::Knockdown => self.data.animations.knockdown,
+            FighterState::GettingUp => self.data.animations.getting_up,
         }
     }
 
@@ -101,8 +152,8 @@ impl GameState {
     pub fn new(p1_fighter: FighterId, p2_fighter: FighterId) -> Self {
         Self {
             fighters: [
-                Fighter::new(p1_fighter, Vec3::new(-3.0, 0.0, 0.0), Facing::Right),
-                Fighter::new(p2_fighter, Vec3::new(3.0, 0.0, 0.0), Facing::Left),
+                Fighter::new(p1_fighter, Vec3::new(-1.5, 0.0, 0.0), Facing::Right),
+                Fighter::new(p2_fighter, Vec3::new(1.5, 0.0, 0.0), Facing::Left),
             ],
             phase: GamePhase::Countdown,
             frame: 0,
@@ -117,8 +168,8 @@ impl GameState {
     pub fn new_in_select() -> Self {
         Self {
             fighters: [
-                Fighter::new(FighterId::Kenzo, Vec3::new(-3.0, 0.0, 0.0), Facing::Right),
-                Fighter::new(FighterId::Kenzo, Vec3::new(3.0, 0.0, 0.0), Facing::Left),
+                Fighter::new(FighterId::Kael, Vec3::new(-1.5, 0.0, 0.0), Facing::Right),
+                Fighter::new(FighterId::Kael, Vec3::new(1.5, 0.0, 0.0), Facing::Left),
             ],
             phase: GamePhase::FighterSelect,
             frame: 0,
@@ -133,8 +184,8 @@ impl GameState {
     /// Set fighters after selection and start countdown.
     pub fn select_fighters(&mut self, p1: FighterId, p2: FighterId) {
         self.fighters = [
-            Fighter::new(p1, Vec3::new(-3.0, 0.0, 0.0), Facing::Right),
-            Fighter::new(p2, Vec3::new(3.0, 0.0, 0.0), Facing::Left),
+            Fighter::new(p1, Vec3::new(-1.5, 0.0, 0.0), Facing::Right),
+            Fighter::new(p2, Vec3::new(1.5, 0.0, 0.0), Facing::Left),
         ];
         self.phase = GamePhase::Countdown;
         self.countdown_timer = 180;
@@ -194,11 +245,11 @@ impl GameState {
                         // Start next round
                         self.current_round += 1;
                         self.fighters[0].reset_round(
-                            Vec3::new(-3.0, 0.0, 0.0),
+                            Vec3::new(-1.5, 0.0, 0.0),
                             Facing::Right,
                         );
                         self.fighters[1].reset_round(
-                            Vec3::new(3.0, 0.0, 0.0),
+                            Vec3::new(1.5, 0.0, 0.0),
                             Facing::Left,
                         );
                         self.round_timer = ROUND_TIME_FRAMES;
@@ -229,6 +280,16 @@ impl GameState {
             self.process_input(i, &inputs[i]);
         }
 
+        // Apply forward lunge when an attack just started
+        for i in 0..2 {
+            if self.fighters[i].state_machine.state == FighterState::Attacking
+                && self.fighters[i].state_machine.frame_counter == 0
+            {
+                let lunge = self.fighters[i].facing.sign() * ATTACK_LUNGE;
+                self.fighters[i].physics.knockback.x = lunge;
+            }
+        }
+
         // Update state machines
         for fighter in &mut self.fighters {
             fighter.state_machine.tick();
@@ -240,6 +301,15 @@ impl GameState {
                 fighter.stamina = (fighter.stamina + STAMINA_REGEN_RATE)
                     .min(fighter.data.max_stamina);
             }
+        }
+
+        // Align fighters on Z-axis — keep them on the same plane so attacks
+        // always connect. Both fighters lerp toward their midpoint Z each frame.
+        let mid_z = (self.fighters[0].physics.position.z
+            + self.fighters[1].physics.position.z)
+            * 0.5;
+        for fighter in &mut self.fighters {
+            fighter.physics.position.z += (mid_z - fighter.physics.position.z) * 0.3;
         }
 
         // Update facing (face opponent)
@@ -327,11 +397,11 @@ impl GameState {
         if let Some(combo) = fighter.input_buffer.detect_combo() {
             let attack_type = match combo {
                 ComboType::ThreeHit => ActiveAttack::ComboFinisher,
-                ComboType::Special => ActiveAttack::Special,
+                ComboType::Super => ActiveAttack::Super,
             };
             let attack_data = fighter.get_attack_data(attack_type);
             let can_afford = match combo {
-                ComboType::Special => fighter.stamina >= SPECIAL_STAMINA_COST,
+                ComboType::Super => fighter.stamina >= SUPER_STAMINA_COST,
                 _ => true,
             };
 
@@ -343,8 +413,8 @@ impl GameState {
                 if fighter.state_machine.start_attack(attack_type, startup, active, recovery) {
                     fighter.input_buffer.clear();
                     fighter.physics.stop_movement();
-                    if matches!(combo, ComboType::Special) {
-                        fighter.stamina -= SPECIAL_STAMINA_COST;
+                    if matches!(combo, ComboType::Super) {
+                        fighter.stamina -= SUPER_STAMINA_COST;
                     }
                     return;
                 }
@@ -390,6 +460,49 @@ impl GameState {
                 attack_data.recovery_frames,
             ) {
                 fighter.stamina -= SPECIAL_STAMINA_COST;
+                fighter.physics.stop_movement();
+                return;
+            }
+        }
+
+        if input.mid_kick {
+            let attack_data = fighter.get_attack_data(ActiveAttack::MidKick);
+            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
+            if fighter.state_machine.start_attack(
+                ActiveAttack::MidKick,
+                startup,
+                attack_data.active_frames,
+                attack_data.recovery_frames,
+            ) {
+                fighter.physics.stop_movement();
+                return;
+            }
+        }
+
+        if input.low_kick {
+            let attack_data = fighter.get_attack_data(ActiveAttack::LowKick);
+            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
+            if fighter.state_machine.start_attack(
+                ActiveAttack::LowKick,
+                startup,
+                attack_data.active_frames,
+                attack_data.recovery_frames,
+            ) {
+                fighter.physics.stop_movement();
+                return;
+            }
+        }
+
+        if input.aerial && fighter.stamina >= AERIAL_STAMINA_COST {
+            let attack_data = fighter.get_attack_data(ActiveAttack::Aerial);
+            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
+            if fighter.state_machine.start_attack(
+                ActiveAttack::Aerial,
+                startup,
+                attack_data.active_frames,
+                attack_data.recovery_frames,
+            ) {
+                fighter.stamina -= AERIAL_STAMINA_COST;
                 fighter.physics.stop_movement();
                 return;
             }
@@ -473,9 +586,25 @@ impl GameState {
                     .physics
                     .apply_knockback(hit.knockback);
 
-                // Apply hitstun or launch
-                if hit.launches {
+                // Apply state change based on hit severity
+                let is_ko = self.fighters[defender_idx].health <= 0.0;
+                let causes_knockdown = matches!(
+                    attack_type,
+                    ActiveAttack::ComboFinisher | ActiveAttack::Super | ActiveAttack::LowKick
+                );
+
+                if is_ko {
+                    // KO: enter knockdown and stay down (very long timer)
+                    self.fighters[defender_idx]
+                        .state_machine
+                        .enter_knockdown(9999);
+                } else if hit.launches {
                     self.fighters[defender_idx].state_machine.enter_airborne();
+                } else if !is_blocking && causes_knockdown {
+                    // Hard knockdown: fall down, then get up
+                    self.fighters[defender_idx]
+                        .state_machine
+                        .enter_knockdown(40);
                 } else if !is_blocking {
                     self.fighters[defender_idx]
                         .state_machine
@@ -539,13 +668,13 @@ mod tests {
 
     #[test]
     fn game_starts_in_countdown() {
-        let game = GameState::new(FighterId::Kenzo, FighterId::Mira);
+        let game = GameState::new(FighterId::Kael, FighterId::Knight);
         assert_eq!(game.phase, GamePhase::Countdown);
     }
 
     #[test]
     fn countdown_transitions_to_fighting() {
-        let mut game = GameState::new(FighterId::Kenzo, FighterId::Mira);
+        let mut game = GameState::new(FighterId::Kael, FighterId::Knight);
         let input = empty_input();
         for _ in 0..200 {
             game.tick(&input, &input);
@@ -555,7 +684,7 @@ mod tests {
 
     #[test]
     fn fighter_takes_damage() {
-        let mut game = GameState::new(FighterId::Kenzo, FighterId::Kenzo);
+        let mut game = GameState::new(FighterId::Kael, FighterId::Kael);
         game.phase = GamePhase::Fighting;
 
         // Move fighters close
@@ -579,7 +708,7 @@ mod tests {
 
     #[test]
     fn blocking_reduces_damage() {
-        let mut game = GameState::new(FighterId::Kenzo, FighterId::Kenzo);
+        let mut game = GameState::new(FighterId::Kael, FighterId::Kael);
         game.phase = GamePhase::Fighting;
 
         game.fighters[0].physics.position = Vec3::new(0.0, 0.0, 0.0);
@@ -601,7 +730,7 @@ mod tests {
         let blocked_health = game.fighters[1].health;
 
         // Reset for unblocked
-        let mut game2 = GameState::new(FighterId::Kenzo, FighterId::Kenzo);
+        let mut game2 = GameState::new(FighterId::Kael, FighterId::Kael);
         game2.phase = GamePhase::Fighting;
         game2.fighters[0].physics.position = Vec3::new(0.0, 0.0, 0.0);
         game2.fighters[1].physics.position = Vec3::new(1.5, 0.0, 0.0);
@@ -619,7 +748,7 @@ mod tests {
 
     #[test]
     fn round_ends_on_ko() {
-        let mut game = GameState::new(FighterId::Kenzo, FighterId::Mira);
+        let mut game = GameState::new(FighterId::Kael, FighterId::Knight);
         game.phase = GamePhase::Fighting;
         game.fighters[1].health = 0.0;
 
@@ -630,7 +759,7 @@ mod tests {
 
     #[test]
     fn round_ends_on_timer() {
-        let mut game = GameState::new(FighterId::Kenzo, FighterId::Mira);
+        let mut game = GameState::new(FighterId::Kael, FighterId::Knight);
         game.phase = GamePhase::Fighting;
         game.round_timer = 1;
         game.fighters[0].health = 80.0;
@@ -644,7 +773,7 @@ mod tests {
 
     #[test]
     fn match_ends_after_enough_round_wins() {
-        let mut game = GameState::new(FighterId::Kenzo, FighterId::Mira);
+        let mut game = GameState::new(FighterId::Kael, FighterId::Knight);
         game.phase = GamePhase::Fighting;
         game.fighters[0].round_wins = 1; // Already won 1
         game.fighters[1].health = 0.0;

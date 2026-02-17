@@ -131,11 +131,11 @@ mod tests {
     use crate::weapon::WeaponData;
 
     fn test_attack() -> &'static AttackData {
-        &FighterData::get(FighterId::Kenzo).moveset.light_attack
+        &FighterData::get(FighterId::Kael).moveset.light_attack
     }
 
     fn test_weapon() -> &'static WeaponData {
-        WeaponData::get(crate::weapon::WeaponType::Katana)
+        WeaponData::get(crate::weapon::WeaponType::Unarmed)
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
             test_weapon(),
             1.0,
             Vec3::new(1.5, 0.0, 0.0),
-            &FighterData::get(FighterId::Kenzo).hurtbox,
+            &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
         );
@@ -166,7 +166,7 @@ mod tests {
             test_weapon(),
             1.0,
             Vec3::new(10.0, 0.0, 0.0),
-            &FighterData::get(FighterId::Kenzo).hurtbox,
+            &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
         );
@@ -182,7 +182,7 @@ mod tests {
             test_weapon(),
             1.0,
             Vec3::new(1.5, 0.0, 0.0),
-            &FighterData::get(FighterId::Kenzo).hurtbox,
+            &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
         )
@@ -195,7 +195,7 @@ mod tests {
             test_weapon(),
             1.0,
             Vec3::new(1.5, 0.0, 0.0),
-            &FighterData::get(FighterId::Kenzo).hurtbox,
+            &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             true,
         )
@@ -217,7 +217,7 @@ mod tests {
             test_weapon(),
             1.0,
             Vec3::new(1.5, 0.0, 0.0),
-            &FighterData::get(FighterId::Kenzo).hurtbox,
+            &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
         )
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn launch_attack_sets_y_velocity() {
-        let special = &FighterData::get(FighterId::Kenzo).moveset.special_attack;
+        let special = &FighterData::get(FighterId::Kael).moveset.aerial;
         assert!(special.launches);
 
         let hit = check_hit(
@@ -239,7 +239,7 @@ mod tests {
             test_weapon(),
             1.0,
             Vec3::new(1.0, 0.0, 0.0),
-            &FighterData::get(FighterId::Kenzo).hurtbox,
+            &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
         )

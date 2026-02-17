@@ -25,7 +25,11 @@ pub enum ActiveAttack {
     Light,
     Heavy,
     Special,
+    MidKick,
+    LowKick,
+    Aerial,
     ComboFinisher,
+    Super,
 }
 
 #[derive(Debug, Clone)]
@@ -179,7 +183,6 @@ impl StateMachine {
 
             FighterState::Attacking => {
                 self.frame_counter += 1;
-                // Determine current phase
                 if self.frame_counter <= self.attack_startup {
                     if self.attack_phase != Some(AttackPhase::Startup) {
                         self.attack_phase = Some(AttackPhase::Startup);
@@ -231,7 +234,6 @@ impl StateMachine {
 
             FighterState::Airborne => {
                 self.frame_counter += 1;
-                // Airborne ends externally when physics detects landing
                 false
             }
 
@@ -240,7 +242,7 @@ impl StateMachine {
                 if self.frame_counter >= self.total_frames {
                     self.state = FighterState::GettingUp;
                     self.frame_counter = 0;
-                    self.total_frames = 20; // getup animation frames
+                    self.total_frames = 20;
                     return true;
                 }
                 false
@@ -300,28 +302,23 @@ mod tests {
         assert_eq!(sm.state, FighterState::Attacking);
         assert!(!sm.can_act());
 
-        // During startup (frames 1-4), phase stays Startup
         for _ in 0..3 {
             sm.tick();
         }
         assert_eq!(sm.attack_phase, Some(AttackPhase::Startup));
 
-        // Frame 4 -> still startup, frame 5 transitions to Active
-        sm.tick(); // frame 4
+        sm.tick();
         assert_eq!(sm.attack_phase, Some(AttackPhase::Startup));
-        sm.tick(); // frame 5 -> Active
+        sm.tick();
         assert_eq!(sm.attack_phase, Some(AttackPhase::Active));
 
-        // Active frames 6, 7
-        sm.tick(); // frame 6
-        sm.tick(); // frame 7
+        sm.tick();
+        sm.tick();
         assert_eq!(sm.attack_phase, Some(AttackPhase::Active));
 
-        // Frame 8 -> Recovery
-        sm.tick(); // frame 8
+        sm.tick();
         assert_eq!(sm.attack_phase, Some(AttackPhase::Recovery));
 
-        // Recovery frames 9-13
         for _ in 0..5 {
             sm.tick();
         }

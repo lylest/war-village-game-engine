@@ -14,6 +14,9 @@ pub enum InputAction {
     Special,
     Block,
     Dash,
+    MidKick,
+    LowKick,
+    Aerial,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -26,7 +29,7 @@ pub struct InputEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComboType {
     ThreeHit,     // Light x3
-    Special,      // Light, Heavy, Special
+    Super,        // Light, Heavy, Special
 }
 
 /// Per-player input state: which directions/buttons are held this frame.
@@ -41,6 +44,9 @@ pub struct InputState {
     pub special: bool,
     pub block: bool,
     pub dash: bool,
+    pub mid_kick: bool,
+    pub low_kick: bool,
+    pub aerial: bool,
 }
 
 impl InputState {
@@ -115,7 +121,7 @@ impl InputBuffer {
             && last3[1].action == InputAction::HeavyAttack
             && last3[2].action == InputAction::Special
         {
-            return Some(ComboType::Special);
+            return Some(ComboType::Super);
         }
 
         // Light x3 = ThreeHit combo
@@ -174,7 +180,7 @@ mod tests {
         buf.set_frame(30);
         buf.push(InputAction::Special);
         buf.set_frame(30);
-        assert_eq!(buf.detect_combo(), Some(ComboType::Special));
+        assert_eq!(buf.detect_combo(), Some(ComboType::Super));
     }
 
     #[test]
