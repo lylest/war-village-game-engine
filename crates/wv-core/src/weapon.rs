@@ -46,9 +46,10 @@ impl WeaponData {
 }
 
 // Unarmed: fast attacks, short range, low base damage
+// Damage tuned so fights last 15-25 hits (MK-style pacing)
 static UNARMED: WeaponData = WeaponData {
     weapon_type: WeaponType::Unarmed,
-    base_damage: 10.0,
+    base_damage: 3.0,
     attack_speed: 1.4,
     range: 1.0,
     weight: 0.6,
@@ -58,7 +59,7 @@ static UNARMED: WeaponData = WeaponData {
 // Sword & Shield: balanced damage, good range, heavy knockback
 static SWORD_AND_SHIELD: WeaponData = WeaponData {
     weapon_type: WeaponType::SwordAndShield,
-    base_damage: 16.0,
+    base_damage: 4.5,
     attack_speed: 0.9,
     range: 1.8,
     weight: 2.0,
@@ -68,7 +69,7 @@ static SWORD_AND_SHIELD: WeaponData = WeaponData {
 // Magic: medium damage, long range, moderate speed
 static MAGIC: WeaponData = WeaponData {
     weapon_type: WeaponType::Magic,
-    base_damage: 12.0,
+    base_damage: 3.5,
     attack_speed: 1.1,
     range: 2.2,
     weight: 1.0,
