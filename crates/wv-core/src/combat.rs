@@ -38,6 +38,10 @@ pub fn defender_hurtbox(defender_pos: Vec3, hurtbox_local: &AABB) -> AABB {
 }
 
 /// Calculate damage and effects of a hit.
+///
+/// `combo_hits` is how many consecutive hits the defender has already taken
+/// (used for combo scaling). `stale_multiplier` scales damage for repeated
+/// use of the same attack (1.0 = fresh, lower = stale).
 pub fn calculate_hit(
     attack: &AttackData,
     weapon: &WeaponData,
@@ -46,12 +50,19 @@ pub fn calculate_hit(
     is_blocking: bool,
     attacker_pos: Vec3,
     defender_pos: Vec3,
+    combo_hits: u32,
+    stale_multiplier: f32,
 ) -> HitResult {
-    let raw_damage = weapon.base_damage * attack.damage_multiplier;
+    // Combo scaling: each hit in a combo does 15% less damage, minimum 40%
+    let combo_damage_scale = (1.0 - combo_hits as f32 * 0.15).max(0.4);
+    // Combo hitstun scaling: each hit gives 25% less hitstun, minimum 30%
+    let combo_hitstun_scale = (1.0 - combo_hits as f32 * 0.25).max(0.3);
+
+    let raw_damage = weapon.base_damage * attack.damage_multiplier * stale_multiplier;
     let damage = if is_blocking {
         raw_damage * BLOCK_DAMAGE_REDUCTION * defender_defense
     } else {
-        raw_damage * defender_defense
+        raw_damage * defender_defense * combo_damage_scale
     };
 
     // Knockback direction: push defender away from attacker
@@ -61,10 +72,12 @@ pub fn calculate_hit(
         -1.0
     };
 
+    // Knockback increases with combo hits to push fighters apart
+    let combo_knockback_boost = 1.0 + combo_hits as f32 * 0.2;
     let knockback_magnitude = if is_blocking {
         attack.knockback_force * 0.3
     } else {
-        attack.knockback_force
+        attack.knockback_force * combo_knockback_boost
     };
 
     let launches = attack.launches && !is_blocking;
@@ -75,11 +88,12 @@ pub fn calculate_hit(
         0.0,
     );
 
-    let hitstun_frames = if is_blocking {
+    let base_hitstun = if is_blocking {
         HITSTUN_BASE_FRAMES / 2
     } else {
-        HITSTUN_BASE_FRAMES + (knockback_magnitude as u32)
+        HITSTUN_BASE_FRAMES + (attack.knockback_force as u32)
     };
+    let hitstun_frames = ((base_hitstun as f32) * combo_hitstun_scale) as u32;
 
     // Use attacker_defense to suppress the warning (it could scale damage in the future)
     let _ = attacker_defense;
@@ -104,6 +118,8 @@ pub fn check_hit(
     defender_hurtbox_local: &AABB,
     defender_defense: f32,
     defender_blocking: bool,
+    combo_hits: u32,
+    stale_multiplier: f32,
 ) -> Option<HitResult> {
     let hitbox = attack_hitbox(attacker_pos, attacker_facing, attack, weapon);
     let hurtbox = defender_hurtbox(defender_pos, defender_hurtbox_local);
@@ -117,6 +133,8 @@ pub fn check_hit(
             defender_blocking,
             attacker_pos,
             defender_pos,
+            combo_hits,
+            stale_multiplier,
         ))
     } else {
         None
@@ -150,6 +168,8 @@ mod tests {
             &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
+            0,
+            1.0,
         );
         assert!(result.is_some());
         let hit = result.unwrap();
@@ -169,6 +189,8 @@ mod tests {
             &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
+            0,
+            1.0,
         );
         assert!(result.is_none());
     }
@@ -185,6 +207,8 @@ mod tests {
             &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
+            0,
+            1.0,
         )
         .unwrap();
 
@@ -198,6 +222,8 @@ mod tests {
             &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             true,
+            0,
+            1.0,
         )
         .unwrap();
 
@@ -220,6 +246,8 @@ mod tests {
             &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
+            0,
+            1.0,
         )
         .unwrap();
 
@@ -242,10 +270,39 @@ mod tests {
             &FighterData::get(FighterId::Kael).hurtbox,
             1.0,
             false,
+            0,
+            1.0,
         )
         .unwrap();
 
         assert!(hit.launches);
         assert!(hit.knockback.y > 0.0);
+    }
+
+    #[test]
+    fn combo_scaling_reduces_damage() {
+        let fresh_hit = calculate_hit(
+            test_attack(), test_weapon(), 1.0, 1.0, false,
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.5, 0.0, 0.0), 0, 1.0,
+        );
+        let combo_hit = calculate_hit(
+            test_attack(), test_weapon(), 1.0, 1.0, false,
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.5, 0.0, 0.0), 3, 1.0,
+        );
+        assert!(combo_hit.damage < fresh_hit.damage);
+        assert!(combo_hit.hitstun_frames < fresh_hit.hitstun_frames);
+    }
+
+    #[test]
+    fn stale_move_reduces_damage() {
+        let fresh_hit = calculate_hit(
+            test_attack(), test_weapon(), 1.0, 1.0, false,
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.5, 0.0, 0.0), 0, 1.0,
+        );
+        let stale_hit = calculate_hit(
+            test_attack(), test_weapon(), 1.0, 1.0, false,
+            Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.5, 0.0, 0.0), 0, 0.6,
+        );
+        assert!(stale_hit.damage < fresh_hit.damage);
     }
 }

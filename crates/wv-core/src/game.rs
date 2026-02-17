@@ -16,6 +16,9 @@ const SPECIAL_STAMINA_COST: f32 = 30.0;
 const AERIAL_STAMINA_COST: f32 = 15.0;
 const SUPER_STAMINA_COST: f32 = 50.0;
 const ATTACK_LUNGE: f32 = 3.5; // forward impulse when starting any attack
+const COMBO_BREAKER_HITS: u32 = 5; // auto-break free after this many consecutive hits
+const FIGHTER_BODY_RADIUS: f32 = 0.45; // half-width of a fighter's body for collision
+const MIN_FIGHTER_DISTANCE: f32 = FIGHTER_BODY_RADIUS * 2.0; // minimum separation on X-axis
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GamePhase {
@@ -37,6 +40,12 @@ pub struct Fighter {
     pub stamina: f32,
     pub facing: Facing,
     pub round_wins: u32,
+    /// How many consecutive hits this fighter has taken without recovering.
+    pub combo_hits_taken: u32,
+    /// Tracks the last attack used by this fighter (for stale move detection).
+    pub last_attack_used: Option<ActiveAttack>,
+    /// How many times the same attack has been used consecutively.
+    pub attack_repeat_count: u32,
 }
 
 impl Fighter {
@@ -53,6 +62,9 @@ impl Fighter {
             stamina: data.max_stamina,
             facing,
             round_wins: 0,
+            combo_hits_taken: 0,
+            last_attack_used: None,
+            attack_repeat_count: 0,
         }
     }
 
@@ -66,6 +78,22 @@ impl Fighter {
 
     pub fn stamina_pct(&self) -> f32 {
         self.stamina / self.data.max_stamina
+    }
+
+    /// Track stale move usage when starting an attack.
+    fn track_attack_used(&mut self, attack: ActiveAttack) {
+        if self.last_attack_used == Some(attack) {
+            self.attack_repeat_count += 1;
+        } else {
+            self.last_attack_used = Some(attack);
+            self.attack_repeat_count = 0;
+        }
+    }
+
+    /// Stale move damage multiplier: repeating the same attack reduces damage.
+    pub fn stale_move_multiplier(&self) -> f32 {
+        // Each repeat reduces damage by 20%, down to 40% minimum
+        (1.0 - self.attack_repeat_count as f32 * 0.2).max(0.4)
     }
 
     fn get_attack_data(&self, attack: ActiveAttack) -> &AttackData {
@@ -133,6 +161,9 @@ impl Fighter {
         self.health = self.data.max_health;
         self.stamina = self.data.max_stamina;
         self.facing = facing;
+        self.combo_hits_taken = 0;
+        self.last_attack_used = None;
+        self.attack_repeat_count = 0;
     }
 }
 
@@ -293,6 +324,10 @@ impl GameState {
         // Update state machines
         for fighter in &mut self.fighters {
             fighter.state_machine.tick();
+            // Reset combo counter when fighter recovers to a neutral state
+            if fighter.state_machine.can_act() {
+                fighter.combo_hits_taken = 0;
+            }
         }
 
         // Regenerate stamina
@@ -339,6 +374,24 @@ impl GameState {
             if landed && fighter.state_machine.state == FighterState::Airborne {
                 fighter.state_machine.land();
                 fighter.physics.stop_movement();
+            }
+        }
+
+        // Push fighters apart if they overlap (prevent body clipping)
+        {
+            let p0x = self.fighters[0].physics.position.x;
+            let p1x = self.fighters[1].physics.position.x;
+            let dx = (p0x - p1x).abs();
+            if dx < MIN_FIGHTER_DISTANCE {
+                let overlap = MIN_FIGHTER_DISTANCE - dx;
+                let half = overlap * 0.5;
+                if p0x < p1x {
+                    self.fighters[0].physics.position.x -= half;
+                    self.fighters[1].physics.position.x += half;
+                } else {
+                    self.fighters[0].physics.position.x += half;
+                    self.fighters[1].physics.position.x -= half;
+                }
             }
         }
 
@@ -411,6 +464,7 @@ impl GameState {
                 let recovery = attack_data.recovery_frames;
 
                 if fighter.state_machine.start_attack(attack_type, startup, active, recovery) {
+                    fighter.track_attack_used(attack_type);
                     fighter.input_buffer.clear();
                     fighter.physics.stop_movement();
                     if matches!(combo, ComboType::Super) {
@@ -421,91 +475,44 @@ impl GameState {
             }
         }
 
-        // Individual attacks
-        if input.light_attack {
-            let attack_data = fighter.get_attack_data(ActiveAttack::Light);
-            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
-            if fighter.state_machine.start_attack(
-                ActiveAttack::Light,
-                startup,
-                attack_data.active_frames,
-                attack_data.recovery_frames,
-            ) {
-                fighter.physics.stop_movement();
-                return;
+        // Individual attacks — helper to start attack + track stale moves
+        let try_attack = |fighter: &mut Fighter, attack: ActiveAttack, stamina_cost: f32| -> bool {
+            if stamina_cost > 0.0 && fighter.stamina < stamina_cost {
+                return false;
             }
-        }
+            let attack_data = fighter.get_attack_data(attack);
+            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
+            let active = attack_data.active_frames;
+            let recovery = attack_data.recovery_frames;
+            if fighter.state_machine.start_attack(attack, startup, active, recovery) {
+                fighter.track_attack_used(attack);
+                if stamina_cost > 0.0 {
+                    fighter.stamina -= stamina_cost;
+                }
+                fighter.physics.stop_movement();
+                true
+            } else {
+                false
+            }
+        };
 
-        if input.heavy_attack {
-            let attack_data = fighter.get_attack_data(ActiveAttack::Heavy);
-            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
-            if fighter.state_machine.start_attack(
-                ActiveAttack::Heavy,
-                startup,
-                attack_data.active_frames,
-                attack_data.recovery_frames,
-            ) {
-                fighter.physics.stop_movement();
-                return;
-            }
+        if input.light_attack && try_attack(fighter, ActiveAttack::Light, 0.0) {
+            return;
         }
-
-        if input.special && fighter.stamina >= SPECIAL_STAMINA_COST {
-            let attack_data = fighter.get_attack_data(ActiveAttack::Special);
-            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
-            if fighter.state_machine.start_attack(
-                ActiveAttack::Special,
-                startup,
-                attack_data.active_frames,
-                attack_data.recovery_frames,
-            ) {
-                fighter.stamina -= SPECIAL_STAMINA_COST;
-                fighter.physics.stop_movement();
-                return;
-            }
+        if input.heavy_attack && try_attack(fighter, ActiveAttack::Heavy, 0.0) {
+            return;
         }
-
-        if input.mid_kick {
-            let attack_data = fighter.get_attack_data(ActiveAttack::MidKick);
-            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
-            if fighter.state_machine.start_attack(
-                ActiveAttack::MidKick,
-                startup,
-                attack_data.active_frames,
-                attack_data.recovery_frames,
-            ) {
-                fighter.physics.stop_movement();
-                return;
-            }
+        if input.special && try_attack(fighter, ActiveAttack::Special, SPECIAL_STAMINA_COST) {
+            return;
         }
-
-        if input.low_kick {
-            let attack_data = fighter.get_attack_data(ActiveAttack::LowKick);
-            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
-            if fighter.state_machine.start_attack(
-                ActiveAttack::LowKick,
-                startup,
-                attack_data.active_frames,
-                attack_data.recovery_frames,
-            ) {
-                fighter.physics.stop_movement();
-                return;
-            }
+        if input.mid_kick && try_attack(fighter, ActiveAttack::MidKick, 0.0) {
+            return;
         }
-
-        if input.aerial && fighter.stamina >= AERIAL_STAMINA_COST {
-            let attack_data = fighter.get_attack_data(ActiveAttack::Aerial);
-            let startup = (attack_data.startup_frames as f32 / fighter.weapon.attack_speed) as u32;
-            if fighter.state_machine.start_attack(
-                ActiveAttack::Aerial,
-                startup,
-                attack_data.active_frames,
-                attack_data.recovery_frames,
-            ) {
-                fighter.stamina -= AERIAL_STAMINA_COST;
-                fighter.physics.stop_movement();
-                return;
-            }
+        if input.low_kick && try_attack(fighter, ActiveAttack::LowKick, 0.0) {
+            return;
+        }
+        if input.aerial && try_attack(fighter, ActiveAttack::Aerial, AERIAL_STAMINA_COST) {
+            return;
         }
 
         // Movement
@@ -558,9 +565,11 @@ impl GameState {
             let attacker_facing = self.fighters[attacker_idx].facing;
             let attacker_weapon = self.fighters[attacker_idx].weapon;
             let attacker_defense = self.fighters[attacker_idx].data.defense;
+            let stale_multiplier = self.fighters[attacker_idx].stale_move_multiplier();
             let defender_pos = self.fighters[defender_idx].physics.position;
             let defender_hurtbox = self.fighters[defender_idx].data.hurtbox;
             let defender_defense = self.fighters[defender_idx].data.defense;
+            let combo_hits = self.fighters[defender_idx].combo_hits_taken;
             let is_blocking =
                 self.fighters[defender_idx].state_machine.state == FighterState::Blocking;
 
@@ -574,6 +583,8 @@ impl GameState {
                 &defender_hurtbox,
                 defender_defense,
                 is_blocking,
+                combo_hits,
+                stale_multiplier,
             );
 
             if let Some(hit) = hit_result {
@@ -586,8 +597,14 @@ impl GameState {
                     .physics
                     .apply_knockback(hit.knockback);
 
+                // Track combo hits on the defender
+                if !is_blocking {
+                    self.fighters[defender_idx].combo_hits_taken += 1;
+                }
+
                 // Apply state change based on hit severity
                 let is_ko = self.fighters[defender_idx].health <= 0.0;
+                let combo_break = self.fighters[defender_idx].combo_hits_taken >= COMBO_BREAKER_HITS;
                 let causes_knockdown = matches!(
                     attack_type,
                     ActiveAttack::ComboFinisher | ActiveAttack::Super | ActiveAttack::LowKick
@@ -598,6 +615,20 @@ impl GameState {
                     self.fighters[defender_idx]
                         .state_machine
                         .enter_knockdown(9999);
+                } else if combo_break {
+                    // Combo breaker: auto-knockdown, push fighters far apart
+                    self.fighters[defender_idx]
+                        .state_machine
+                        .enter_knockdown(25);
+                    self.fighters[defender_idx].combo_hits_taken = 0;
+                    // Push both fighters apart
+                    let push_dir = if defender_pos.x >= attacker_pos.x { 1.0 } else { -1.0 };
+                    self.fighters[defender_idx]
+                        .physics
+                        .apply_knockback(Vec3::new(push_dir * 8.0, 0.0, 0.0));
+                    self.fighters[attacker_idx]
+                        .physics
+                        .apply_knockback(Vec3::new(-push_dir * 5.0, 0.0, 0.0));
                 } else if hit.launches {
                     self.fighters[defender_idx].state_machine.enter_airborne();
                 } else if !is_blocking && causes_knockdown {
@@ -615,13 +646,19 @@ impl GameState {
                 self.fighters[attacker_idx].state_machine.hit_connected = true;
 
                 // Record hit info
+                let combo_label = if combo_hits > 0 {
+                    format!(" [{} hit combo]", combo_hits + 1)
+                } else {
+                    String::new()
+                };
                 self.last_hit_info = Some(format!(
-                    "P{} {} -> P{} for {:.1} dmg{}",
+                    "P{} {} -> P{} for {:.1} dmg{}{}",
                     attacker_idx + 1,
                     attack_data.name,
                     defender_idx + 1,
                     hit.damage,
                     if hit.was_blocked { " (BLOCKED)" } else { "" },
+                    combo_label,
                 ));
             }
         }
