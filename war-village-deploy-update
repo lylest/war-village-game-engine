@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# War Village — incremental update deploy
+# Detects what changed since the last deploy and only rebuilds/uploads that.
+#
+# Usage:
+#   ./war-village-deploy-update              # auto-detect from file timestamps
+#   ./war-village-deploy-update --wasm       # force WASM rebuild (also rebuilds web)
+#   ./war-village-deploy-update --web        # force web rebuild only
+#   ./war-village-deploy-update --api        # force Go API rebuild only
+#   ./war-village-deploy-update --all        # rebuild and deploy everything
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+VPS="root@168.231.83.23"
+GO="$HOME/sdk/go1.25.6/bin/go"
+
+# This script lives at the root of the rust/war-village repo.
+# Sibling projects sit two levels up.
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECTS_DIR="$(cd "$REPO_DIR/../.." && pwd)"
+
+RUST_DIR="$REPO_DIR"
+WEB_DIR="$PROJECTS_DIR/war-village-web"
+GO_DIR="$PROJECTS_DIR/war-village-go-service"
+
+# Stamp file records the time of the last successful deploy-update
+STAMP="$REPO_DIR/.deploy-update-stamp"
+
+# ── Parse flags ───────────────────────────────────────────────────────────────
+FORCE_WASM=false
+FORCE_WEB=false
+FORCE_API=false
+FORCE_ALL=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --wasm) FORCE_WASM=true ;;
+    --web)  FORCE_WEB=true  ;;
+    --api)  FORCE_API=true  ;;
+    --all)  FORCE_ALL=true  ;;
+    *) echo "Unknown flag: $arg"; echo "Usage: $0 [--wasm|--web|--api|--all]"; exit 1 ;;
+  esac
+done
+
+# ── Auto-detect changed components from file timestamps ───────────────────────
+changed_since_stamp() {
+  local dir="$1"
+  if [[ ! -f "$STAMP" ]]; then return 0; fi
+  find "$dir" \
+    -not \( -path "*/node_modules/*" -o -path "*/target/*" -o -path "*/dist/*" \
+            -o -path "*/.git/*"      -o -path "*/pkg/*"    -o -path "*/build/*" \) \
+    -newer "$STAMP" -type f \
+    | grep -q . 2>/dev/null
+}
+
+BUILD_WASM=false
+BUILD_WEB=false
+BUILD_API=false
+
+if $FORCE_ALL; then
+  BUILD_WASM=true; BUILD_WEB=true; BUILD_API=true
+else
+  if $FORCE_WASM || changed_since_stamp "$RUST_DIR"; then
+    BUILD_WASM=true; BUILD_WEB=true   # WASM change always requires web rebuild
+  fi
+  if $FORCE_WEB  || changed_since_stamp "$WEB_DIR";  then BUILD_WEB=true;  fi
+  if $FORCE_API  || changed_since_stamp "$GO_DIR";   then BUILD_API=true;  fi
+fi
+
+# ── Nothing to do? ────────────────────────────────────────────────────────────
+if ! $BUILD_WASM && ! $BUILD_WEB && ! $BUILD_API; then
+  echo "✓ Nothing changed since last deploy. Use --all to force a full redeploy."
+  exit 0
+fi
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+echo "════════════════════════════════════════"
+echo " War Village Update → $VPS"
+echo "════════════════════════════════════════"
+echo ""
+echo "  Will rebuild:"
+$BUILD_WASM && echo "    • WASM  (wv-wasm crate)"
+$BUILD_WEB  && echo "    • Web   (React + Vite)"
+$BUILD_API  && echo "    • API   (Go binary)"
+echo ""
+
+# ── 1. WASM ───────────────────────────────────────────────────────────────────
+if $BUILD_WASM; then
+  echo "▶ Building WASM..."
+  cd "$RUST_DIR"
+  wasm-pack build crates/wv-wasm --target web --out-dir pkg
+  echo "  ✓ WASM built"
+  echo ""
+fi
+
+# ── 2. React web ──────────────────────────────────────────────────────────────
+if $BUILD_WEB; then
+  echo "▶ Building React web..."
+  cd "$WEB_DIR"
+  if [[ ! -f "$STAMP" ]] || find "$WEB_DIR" -name "package-lock.json" -newer "$STAMP" | grep -q .; then
+    echo "  (package-lock changed — running npm ci)"
+    npm ci --silent
+  fi
+  npm run build
+  echo "  ✓ Web built → dist/"
+  echo ""
+fi
+
+# ── 3. Go binary ──────────────────────────────────────────────────────────────
+if $BUILD_API; then
+  echo "▶ Compiling Go service..."
+  cd "$GO_DIR"
+  mkdir -p build
+  GOOS=linux GOARCH=amd64 "$GO" build -ldflags="-s -w" -o build/war-village-tournament ./cmd/main.go
+  echo "  ✓ Go binary → build/war-village-tournament"
+  echo ""
+fi
+
+# ── 4. Upload ─────────────────────────────────────────────────────────────────
+echo "▶ Uploading to $VPS..."
+
+if $BUILD_WEB; then
+  rsync -az --delete \
+    "$WEB_DIR/dist/" \
+    "$VPS:/var/www/war-village/"
+  echo "  ✓ Web files synced"
+fi
+
+if $BUILD_API; then
+  rsync -az \
+    "$GO_DIR/build/war-village-tournament" \
+    "$VPS:/opt/war-village/war-village-tournament"
+  ssh "$VPS" "chmod +x /opt/war-village/war-village-tournament && systemctl restart war-village && systemctl is-active war-village"
+  echo "  ✓ Go binary uploaded and service restarted"
+fi
+
+# ── 5. Update stamp ───────────────────────────────────────────────────────────
+touch "$STAMP"
+
+echo ""
+echo "════════════════════════════════════════"
+echo " Update complete!"
+echo "  Web → https://warvillage.nogesha.com"
+echo "  API → https://warapi.nogesha.com"
+echo "════════════════════════════════════════"
